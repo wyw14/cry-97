@@ -42,11 +42,16 @@ func (s *Service) ChangeRate(ctx context.Context, change Change, now time.Time) 
 	}
 	command.Setpoint = change.Rate
 	command.Metadata["change_id"] = change.ID.String()
-	if err := s.publisher.Publish(ctx, command); err != nil {
-		return model.DeviceCommand{}, fmt.Errorf("publish dosing command: %w", err)
-	}
+	// Persist the batch record before driving the device. The journal is the
+	// source of truth for the batch's dosing history: if it cannot be saved, the
+	// doser must not be commanded, otherwise a restart loses the adjustment while
+	// the pump keeps running at the new rate. Only once the record is durable do
+	// we publish the command and update the in-memory ledger.
 	if _, err := s.journal.Append(ctx, event); err != nil {
 		return model.DeviceCommand{}, fmt.Errorf("append dosing batch failed: %w", err)
+	}
+	if err := s.publisher.Publish(ctx, command); err != nil {
+		return model.DeviceCommand{}, fmt.Errorf("publish dosing command: %w", err)
 	}
 	s.ledger.Record(change)
 	return command, nil
