@@ -22,26 +22,26 @@ func (a *Arbiter) Reserve(request Request, now time.Time) (Reservation, error) {
 	if request.ID.String() == "00000000-0000-0000-0000-000000000000" {
 		return Reservation{}, errors.New("interlock request is not initialized")
 	}
+	// The availability check and the commit must run as one atomic decision so
+	// that concurrent reservations for overlapping resources (for instance a
+	// backwash and a drain that both claim the shared line resource) are settled
+	// by a single arbiter pass: the first request to acquire the lock wins, every
+	// conflicting request observes the held resource and is rejected.
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	if current, exists := a.requests[request.ID.String()]; exists {
-		a.mu.Unlock()
 		return current, nil
 	}
 	for _, resource := range request.Resources {
 		if owner, occupied := a.resources[resource]; occupied {
-			a.mu.Unlock()
 			return Reservation{}, fmt.Errorf("interlock resource %s is held by %s", resource, owner.Request.RouteID)
 		}
 	}
-	a.mu.Unlock()
-	time.Sleep(time.Millisecond)
 	reservation := Reservation{Request: request, ReservedAt: now.UTC()}
-	a.mu.Lock()
 	for _, resource := range request.Resources {
 		a.resources[resource] = reservation
 	}
 	a.requests[request.ID.String()] = reservation
-	a.mu.Unlock()
 	return reservation, nil
 }
 
