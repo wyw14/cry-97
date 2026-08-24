@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,21 +20,10 @@ type QualificationOutcome struct {
 func (p *Plant) SubmitLabPayload(ctx context.Context, payload []byte) (QualificationOutcome, error) {
 	now := p.now()
 	result, decodeErr := lab.Decode(payload, now)
-	if decodeErr != nil && result.BatchID == uuid.Nil {
-		for _, line := range p.Lines() {
-			if batch, ok := p.ActiveBatch(line.ID); ok {
-				result.BatchID = batch.ID
-				result.LineID = line.ID
-				result.SampleID = uuid.New()
-				result.Revision = 1
-				break
-			}
-		}
+	if decodeErr != nil {
+		return QualificationOutcome{}, fmt.Errorf("decode sample result failed: %w", decodeErr)
 	}
 	outcome, applyErr := p.ApplyLabResult(ctx, result, now)
-	if decodeErr != nil {
-		return QualificationOutcome{}, decodeErr
-	}
 	if applyErr != nil {
 		return QualificationOutcome{}, applyErr
 	}
@@ -44,10 +34,9 @@ func (p *Plant) ApplyLabResult(ctx context.Context, result model.LabResult, now 
 	if err := ctx.Err(); err != nil {
 		return QualificationOutcome{}, err
 	}
-	if result.BatchID == uuid.Nil {
+	if !result.Valid || result.BatchID == uuid.Nil {
 		return QualificationOutcome{}, errors.New("invalid lab result cannot qualify a batch")
 	}
-	result.Valid = true
 	p.mu.Lock()
 	batch, exists := p.batches[result.BatchID]
 	if !exists {
